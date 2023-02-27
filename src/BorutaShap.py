@@ -1,21 +1,13 @@
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, IsolationForest
-from sklearn.datasets import load_breast_cancer, load_boston
-from statsmodels.stats.multitest import multipletests
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.cluster import KMeans
-from scipy.sparse import issparse
 from scipy.stats import binom_test, ks_2samp
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
-import random
 import pandas as pd
 import numpy as np
 from numpy.random import choice
 import seaborn as sns
-import shap
-import os
-import re
+import fasttreeshap
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -257,12 +249,8 @@ class BorutaShap:
             except:
                 self.model.fit(X, y, sample_weight = sample_weight)
 
-
-
-
-    def fit(self, X, y, sample_weight = None, n_trials = 20, random_state=0, sample=False,
-            train_or_test = 'test', normalize=True, verbose=True, stratify=None):
-
+    def fit(self, X, y, sample_weight=None, n_trials=20, random_state=0, sample=False, train_or_test='test',
+            normalize=True, verbose=True, stratify=None, approximate=True, feature_perturbation="tree_path_dependent"):
         """
         The main body of the program this method it computes the following
 
@@ -304,29 +292,35 @@ class BorutaShap:
         sample_weight: Series/ndarray
             A pandas series or numpy ndarray of the sample weight of the observations (optional)
 
+        n_trials: int
+            The number of times to run Boruta to determine feature importance
+
         random_state: int
             A random state for reproducibility of results
 
-        Sample: Boolean
-            if true then a rowise sample of the data will be used to calculate the feature importance values
-
-        sample_fraction: float
-            The sample fraction of the original data used in calculating the feature importance values only
-            used if Sample==True.
+        sample: Boolean
+            If true then a rowise sample of the data will be used to calculate the feature importance values
 
         train_or_test: string
             Decides whether the feature importance should be calculated on out of sample data see the dicussion here.
             https://compstat-lmu.github.io/iml_methods_limitations/pfi-data.html#introduction-to-test-vs.training-data
 
         normalize: boolean
-            if true the importance values will be normalized using the z-score formula
+            If true the importance values will be normalized using the z-score formula
 
         verbose: Boolean
-            a flag indicator to print out all the rejected or accepted features.
+            A flag indicator to print out all the rejected or accepted features.
 
         stratify: array
-            allows the train test splits to be stratified based on given values.
+            Allows the train test splits to be stratified based on given values.
 
+        approximate: Boolean
+            Whether to do exact of approximate SHAP calculations
+
+        feature_perturbation: string
+            Parameter to SHAP. The two options are 'tree_path_dependent' and 'interventional'. These refer to the
+            methods of calculating probabilities in SHAP.'tree_path_dependent' is truer to data while 'interventional'
+            is truer to model. 'interventional' tends to be slower.
         """
 
         if sample_weight is None:
@@ -349,6 +343,10 @@ class BorutaShap:
         self.train_or_test = train_or_test
         self.stratify = stratify
 
+        self.normalize = normalize
+        self.approximate = approximate
+        self.feature_perturbation = feature_perturbation
+
         self.features_to_remove = []
         self.hits  = np.zeros(self.ncols)
         self.order = self.create_mapping_between_cols_and_indices()
@@ -369,8 +367,7 @@ class BorutaShap:
             else:
 
                 self.Check_if_chose_train_or_test_and_train_model()
-
-                self.X_feature_import, self.Shadow_feature_import = self.feature_importance(normalize=normalize)
+                self.X_feature_import, self.Shadow_feature_import = self.feature_importance()
                 self.update_importance_history()
                 hits = self.calculate_hits()
                 self.hits += hits
@@ -384,7 +381,7 @@ class BorutaShap:
     def calculate_rejected_accepted_tentative(self, verbose):
 
         """
-        Figures out which features have been either accepted rejeected or tentative
+        Figures out which features have been either accepted rejected or tentative
 
         Returns
         -------
@@ -590,19 +587,9 @@ class BorutaShap:
         std_value  = np.std(array)
         return [(element-mean_value)/std_value for element in array]
 
-
-    def feature_importance(self, normalize):
-
+    def feature_importance(self):
         """
         Caculates the feature importances scores of the model
-
-        Parameters
-        ----------
-        importance_measure: string
-            allows the user to choose either the Shap or Gini importance metrics
-
-        normalize: boolean
-            if true the importance values will be normalized using the z-score formula
 
         Returns:
             array of normalized feature importance scores for both the shadow and original features.
@@ -614,33 +601,24 @@ class BorutaShap:
         """
 
         if self.importance_measure == 'shap':
-
             self.explain()
             vals = self.shap_values
-
-            if normalize:
+            if self.normalize:
                 vals = self.calculate_Zscore(vals)
-
-            X_feature_import = vals[:len(self.X.columns)]
-            Shadow_feature_import = vals[len(self.X_shadow.columns):]
-
+            x_feature_import = vals[:len(self.X.columns)]
+            shadow_feature_import = vals[len(self.X_shadow.columns):]
 
         elif self.importance_measure == 'gini':
-
-                feature_importances_ =  np.abs(self.model.feature_importances_)
-
-                if normalize:
-                    feature_importances_ = self.calculate_Zscore(feature_importances_)
-
-                X_feature_import = feature_importances_[:len(self.X.columns)]
-                Shadow_feature_import = feature_importances_[len(self.X.columns):]
+            feature_importances_ = np.abs(self.model.feature_importances_)
+            if self.normalize:
+                feature_importances_ = self.calculate_Zscore(feature_importances_)
+            x_feature_import = feature_importances_[:len(self.X.columns)]
+            shadow_feature_import = feature_importances_[len(self.X.columns):]
 
         else:
-
             raise ValueError('No Importance_measure was specified select one of (shap, gini)')
 
-
-        return X_feature_import, Shadow_feature_import
+        return x_feature_import, shadow_feature_import
 
 
     @staticmethod
@@ -690,10 +668,7 @@ class BorutaShap:
 
         return self.X_boruta.iloc[sample_indices]
 
-
-
     def explain(self):
-
         """
         The shap package has numerous variants of explainers which use different assumptions depending on the model
         type this function allows the user to choose explainer
@@ -706,16 +681,21 @@ class BorutaShap:
             ValueError:
                 if no model type has been specified tree as default
         """
+        explainer = fasttreeshap.TreeExplainer(
+            self.model,
+            # data=self.X,
+            feature_perturbation=self.feature_perturbation,
+            algorithm="v2",
+            approximate=self.approximate
+        )
 
-
-        explainer = shap.TreeExplainer(self.model, 
-                                       feature_perturbation = "tree_path_dependent",
-                                       approximate = True)
-
+        # explainer = shap.TreeExplainer(
+        #     self.model,
+        #     feature_perturbation=self.feature_perturbation,
+        #     approximate=self.approximate,
+        # )
 
         if self.sample:
-
-
             if self.classification:
                 # for some reason shap returns values wraped in a list of length 1
 
@@ -1034,29 +1014,3 @@ class BorutaShap:
     @staticmethod
     def to_dictionary(list_one, list_two):
         return dict(zip(list_one, list_two))
-
-
-
-def load_data(data_type='classification'):
-
-    """
-    Load Example datasets for the user to try out the package
-    """
-
-    data_type = data_type.lower()
-
-    if data_type == 'classification':
-        cancer = load_breast_cancer()
-        X = pd.DataFrame(np.c_[cancer['data'], cancer['target']], columns = np.append(cancer['feature_names'], ['target']))
-        y = X.pop('target')
-
-    elif data_type == 'regression':
-        boston = load_boston()
-        X = pd.DataFrame(np.c_[boston['data'], boston['target']], columns = np.append(boston['feature_names'], ['target']))
-        y = X.pop('target')
-
-    else:
-        raise ValueError("No data_type was specified, use either 'classification' or 'regression'")
-
-
-    return X, y
