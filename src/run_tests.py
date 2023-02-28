@@ -1,41 +1,9 @@
-import numpy as np
-import pandas as pd
-
-from BorutaShap import BorutaShap
+from BorutaShap import BorutaShap, load_data
 from xgboost import XGBClassifier,XGBRegressor
 from catboost import CatBoostClassifier,CatBoostRegressor
-from sklearn.datasets import load_breast_cancer, fetch_california_housing
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from lightgbm import LGBMClassifier, LGBMRegressor
-
-
-def load_data(data_type='classification'):
-    """
-    Load Example datasets for the user to try out the package
-    """
-    data_type = data_type.lower()
-
-    if data_type == 'classification':
-        cancer = load_breast_cancer()
-        X = pd.DataFrame(
-            np.c_[cancer['data'], cancer['target']],
-            columns=np.append(cancer['feature_names'], ['target'])
-        )
-        y = X.pop('target')
-
-    elif data_type == 'regression':
-        housing = fetch_california_housing()
-        X = pd.DataFrame(
-            np.c_[housing['data'], housing['target']],
-            columns=np.append(housing['feature_names'], ['target'])
-        )
-        y = X.pop('target')
-
-    else:
-        raise ValueError("No data_type was specified, use either 'classification' or 'regression'")
-
-    return X, y
 
 
 def test_models(data_type, models):

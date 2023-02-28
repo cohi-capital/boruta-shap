@@ -83,7 +83,7 @@ Feature_Selector.plot(which_features='all')
 
 ```python
 # Returns a subset of the original data with the selected features
-subset = Feature_Selector.Subset()
+subset = Feature_Selector.subset()
 ```
 
 <img src="https://github.com/Ekeany/Boruta-Shap/blob/master/images/bostonsubset.PNG?raw=true" height="194" width="465">
@@ -124,7 +124,7 @@ Feature_Selector.plot(which_features='all')
 
 ```python
 # Returns a subset of the original data with the selected features
-subset = Feature_Selector.Subset()
+subset = Feature_Selector.subset()
 ```
 <img src="https://github.com/Ekeany/Boruta-Shap/blob/master/images/binarysubset.PNG?raw=true">
 

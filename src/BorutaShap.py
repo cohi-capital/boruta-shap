@@ -1,8 +1,8 @@
+from sklearn.datasets import load_breast_cancer, fetch_california_housing
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, IsolationForest
-from sklearn.model_selection import train_test_split
 from scipy.stats import binom_test, ks_2samp
 import matplotlib.pyplot as plt
-from tqdm.auto import tqdm
+from tqdm import trange
 import pandas as pd
 import numpy as np
 from numpy.random import choice
@@ -14,20 +14,15 @@ warnings.filterwarnings("ignore")
 
 
 class BorutaShap:
-
     """
     BorutaShap is a wrapper feature selection method built on the foundations of both the SHAP and Boruta algorithms.
-
     """
-
-    def __init__(self, model=None, importance_measure='Shap',
-                classification=True, percentile=100, pvalue=0.05):
-
+    def __init__(self, model=None, importance_measure='Shap', classification=True, percentile=100, pvalue=0.05):
         """
         Parameters
         ----------
         model: Model Object
-            If no model specified then a base Random Forest will be returned otherwise the specifed model will
+            If no model specified then a base Random Forest will be returned otherwise the specified model will
             be returned.
 
         importance_measure: String
@@ -37,220 +32,70 @@ class BorutaShap:
             if true then the problem is either a binary or multiclass problem otherwise if false then it is regression
 
         percentile: Int
-            An integer ranging from 0-100 it changes the value of the max shadow importance values. Thus, lowering its value
-            would make the algorithm more lenient.
+            An integer ranging from 0-100 it changes the value of the max shadow importance values. Thus, lowering its
+            value would make the algorithm more lenient.
 
-        p_value: float
-            A float used as a significance level again if the p-value is increased the algorithm will be more lenient making it smaller
-            would make it more strict also by making the model more strict could impact runtime making it slower. As it will be less likley
-            to reject and accept features.
-
+        pvalue: float
+            A float used as a significance level again if the p-value is increased the algorithm will be more lenient
+            making it smaller would make it more strict also by making the model more strict could impact runtime making
+            it slower. As it will be less likely to reject and accept features.
         """
-
         self.importance_measure = importance_measure.lower()
         self.percentile = percentile
         self.pvalue = pvalue
         self.classification = classification
         self.model = model
+
+        # All the features introduced later on:
+
+        # Populated in fit
+        self.starting_X = None
+        self.X = None
+        self.y = None
+        self.sample_weight = None
+        self.n_trials = None
+        self.random_state = None
+        self.ncols = None
+        self.columns = None
+        self.all_columns = None
+        self.rejected_columns = []
+        self.accepted_columns = []
+        self.sample = None
+        self.normalize = None
+        self.approximate = None
+        self.feature_perturbation = None
+        self.check_additivity = None
+        self.features_to_remove = []
+        self.hits = None
+        self.order = None
+        self.preds = None
+        self.X_feature_import = None
+        self.shadow_feature_import = None
+
+        # Populated in create_importance_history
+        self.history_shadow = None
+        self.history_x = None
+        self.history_hits = None
+
+        # Populated in create_shadow_features
+        self.X_shadow = None
+        self.X_boruta = None
+        self.X_categorical = None
+
+        # Populated in explain
+        self.shap_values = None
+
+        # Populated in calculate_rejected_accepted_tentative
+        self.rejected = []
+        self.accepted = []
+        self.tentative = []
+
         self.check_model()
-
-
-    def check_model(self):
-
-        """
-        Checks that a model object has been passed as a parameter when intiializing the BorutaShap class.
-
-        Returns
-        -------
-        Model Object
-            If no model specified then a base Random Forest will be returned otherwise the specifed model will
-            be returned.
-
-        Raises
-        ------
-        AttirbuteError
-             If the model object does not have the required attributes.
-
-        """
-
-        check_fit = hasattr(self.model, 'fit')
-        check_predict_proba = hasattr(self.model, 'predict')
-
-        try:
-            check_feature_importance = hasattr(self.model, 'feature_importances_')
-
-        except:
-            check_feature_importance = True
-
-
-        if self.model is None:
-
-            if self.classification:
-                self.model = RandomForestClassifier()
-            else:
-                self.model = RandomForestRegressor()
-
-        elif check_fit is False and check_predict_proba is False:
-            raise AttributeError('Model must contain both the fit() and predict() methods')
-
-        elif check_feature_importance is False and self.importance_measure == 'gini':
-            raise AttributeError('Model must contain the feature_importances_ method to use Gini try Shap instead')
-
-        else:
-            pass
-
-
-    def check_X(self):
-
-        """
-        Checks that the data passed to the BorutaShap instance is a pandas Dataframe
-
-        Returns
-        -------
-        Datframe
-
-        Raises
-        ------
-        AttirbuteError
-             If the data is not of the expected type.
-
-        """
-
-        if isinstance(self.X, pd.DataFrame) is False:
-            raise AttributeError('X must be a pandas Dataframe')
-
-        else:
-            pass
-
-
-    def missing_values_y(self):
-
-        """
-        Checks for missing values in target variable.
-
-        Returns
-        -------
-        Boolean
-
-        Raises
-        ------
-        AttirbuteError
-             If data is not in the expected format.
-
-        """
-
-        if isinstance(self.y, pd.Series):
-            return self.y.isnull().any().any()
-
-        elif isinstance(self.y, np.ndarray):
-            return np.isnan(self.y).any()
-
-        else:
-            raise AttributeError('Y must be a pandas Dataframe or a numpy array')
-
-
-    def check_missing_values(self):
-
-        """
-        Checks for missing values in the data.
-
-        Returns
-        -------
-        Boolean
-
-        Raises
-        ------
-        AttirbuteError
-             If there are missing values present.
-
-        """
-
-        X_missing = self.X.isnull().any().any()
-        Y_missing = self.missing_values_y()
-
-        models_to_check = ('xgb', 'catboost', 'lgbm', 'lightgbm')
-
-        model_name = str(type(self.model)).lower()
-        if X_missing or Y_missing:
-
-            if any([x in model_name for x in models_to_check]):
-                print('Warning there are missing values in your data !')
-
-            else:
-                raise ValueError('There are missing values in your Data')
-
-        else:
-            pass
-
-
-    def Check_if_chose_train_or_test_and_train_model(self):
-
-        """
-        Decides to fit the model to either the training data or the test/unseen data a great discussion on the
-        differences can be found here.
-
-        https://compstat-lmu.github.io/iml_methods_limitations/pfi-data.html#introduction-to-test-vs.training-data
-
-        """
-        if self.stratify is not None and not self.classification:
-            raise ValueError('Cannot take a strtified sample from continuous variable please bucket the variable and try again !')
-
-
-        if self.train_or_test.lower() == 'test':
-            # keeping the same naming convenetion as to not add complexit later on
-            self.X_boruta_train, self.X_boruta_test, self.y_train, self.y_test, self.w_train, self.w_test = train_test_split(self.X_boruta,
-                                                                                                                                self.y,
-                                                                                                                                self.sample_weight,
-                                                                                                                                test_size=0.3,
-                                                                                                                                random_state=self.random_state,
-                                                                                                                                stratify=self.stratify)
-            self.Train_model(self.X_boruta_train, self.y_train, sample_weight = self.w_train)
-
-        elif self.train_or_test.lower() == 'train':
-            # model will be trained and evaluated on the same data
-            self.Train_model(self.X_boruta, self.y, sample_weight = self.sample_weight)
-
-        else:
-            raise ValueError('The train_or_test parameter can only be "train" or "test"')
-
-
-
-    def Train_model(self, X, y, sample_weight = None):
-
-        """
-        Trains Model also checks to see if the model is an instance of catboost as it needs extra parameters
-        also the try except is for models with a verbose statement
-
-        Parameters
-        ----------
-        X: Dataframe
-            A pandas dataframe of the features.
-
-        y: Series/ndarray
-            A pandas series or numpy ndarray of the target
-
-        sample_weight: Series/ndarray
-            A pandas series or numpy ndarray of the sample weights
-
-        Returns
-        ----------
-        fitted model object
-
-        """
-
-        if 'catboost' in str(type(self.model)).lower():
-            self.model.fit(X, y, sample_weight = sample_weight, cat_features = self.X_categorical,  verbose=False)
-
-        else:
-
-            try:
-                self.model.fit(X, y, sample_weight = sample_weight, verbose=False)
-
-            except:
-                self.model.fit(X, y, sample_weight = sample_weight)
-
-    def fit(self, X, y, sample_weight=None, n_trials=20, random_state=0, sample=False, train_or_test='test',
-            normalize=True, verbose=True, stratify=None, approximate=True, feature_perturbation="tree_path_dependent"):
+        # Record model type
+        self.model_type = str(type(self.model)).lower()
+
+    def fit(self, X, y, sample_weight=None, n_trials=20, random_state=0, sample=False, check_additivity=False,
+            normalize=True, verbose=True, approximate=False, feature_perturbation="tree_path_dependent"):
         """
         The main body of the program this method it computes the following
 
@@ -299,20 +144,16 @@ class BorutaShap:
             A random state for reproducibility of results
 
         sample: Boolean
-            If true then a rowise sample of the data will be used to calculate the feature importance values
+            If true then a row-wise sample of the data will be used to calculate the feature importance values
 
-        train_or_test: string
-            Decides whether the feature importance should be calculated on out of sample data see the dicussion here.
-            https://compstat-lmu.github.io/iml_methods_limitations/pfi-data.html#introduction-to-test-vs.training-data
+        check_additivity: Boolean
+            Whether to check the additivity property during SHAP calculations
 
         normalize: boolean
             If true the importance values will be normalized using the z-score formula
 
         verbose: Boolean
             A flag indicator to print out all the rejected or accepted features.
-
-        stratify: array
-            Allows the train test splits to be stratified based on given values.
 
         approximate: Boolean
             Whether to do exact of approximate SHAP calculations
@@ -322,7 +163,6 @@ class BorutaShap:
             methods of calculating probabilities in SHAP.'tree_path_dependent' is truer to data while 'interventional'
             is truer to model. 'interventional' tends to be slower.
         """
-
         if sample_weight is None:
             sample_weight = np.ones(len(X))
         np.random.seed(random_state)
@@ -340,46 +180,178 @@ class BorutaShap:
         self.check_X()
         self.check_missing_values()
         self.sample = sample
-        self.train_or_test = train_or_test
-        self.stratify = stratify
 
         self.normalize = normalize
         self.approximate = approximate
         self.feature_perturbation = feature_perturbation
+        self.check_additivity = check_additivity
 
         self.features_to_remove = []
-        self.hits  = np.zeros(self.ncols)
+        self.hits = np.zeros(self.ncols)
         self.order = self.create_mapping_between_cols_and_indices()
         self.create_importance_history()
 
-        if self.sample: self.preds = self.isolation_forest(self.X, self.sample_weight)
+        if self.sample:
+            self.preds = self.isolation_forest(self.X, self.sample_weight)
 
-        for trial in tqdm(range(self.n_trials)):
-
+        for trial in trange(self.n_trials):
             self.remove_features_if_rejected()
             self.columns = self.X.columns.to_numpy()
             self.create_shadow_features()
 
-            # early stopping
+            # Early stopping
             if self.X.shape[1] == 0:
                 break
 
-            else:
+            self.train_model()
+            self.X_feature_import, self.shadow_feature_import = self.feature_importance()
+            self.update_importance_history()
+            hits = self.calculate_hits()
+            self.hits += hits
+            self.history_hits = np.vstack((self.history_hits, self.hits))
+            self.test_features(iteration=trial+1)
 
-                self.Check_if_chose_train_or_test_and_train_model()
-                self.X_feature_import, self.Shadow_feature_import = self.feature_importance()
-                self.update_importance_history()
-                hits = self.calculate_hits()
-                self.hits += hits
-                self.history_hits = np.vstack((self.history_hits, self.hits))
-                self.test_features(iteration=trial+1)
+            print(f"\nFinished loop {trial} of {n_trials}.\n")
 
         self.store_feature_importance()
         self.calculate_rejected_accepted_tentative(verbose=verbose)
 
+    def check_model(self):
+        """
+        Checks that a model object has been passed as a parameter when initializing the BorutaShap class.
+
+        Returns
+        -------
+        Model Object
+            If no model specified then a base Random Forest will be returned otherwise the specified model will
+            be returned.
+
+        Raises
+        ------
+        AttributeError
+             If the model object does not have the required attributes.
+        """
+        check_fit = hasattr(self.model, 'fit')
+        check_predict_proba = hasattr(self.model, 'predict')
+
+        try:
+            check_feature_importance = hasattr(self.model, 'feature_importances_')
+        except:
+            check_feature_importance = True
+
+        if self.model is None:
+            if self.classification:
+                self.model = RandomForestClassifier()
+            else:
+                self.model = RandomForestRegressor()
+
+        elif check_fit is False and check_predict_proba is False:
+            raise AttributeError('Model must contain both the fit() and predict() methods')
+
+        elif check_feature_importance is False and self.importance_measure == 'gini':
+            raise AttributeError('Model must contain the feature_importances_ method to use Gini try Shap instead')
+
+        else:
+            pass
+
+    def check_X(self):
+        """
+        Checks that the data passed to the BorutaShap instance is a pandas Dataframe
+
+        Returns
+        -------
+        Dataframe
+
+        Raises
+        ------
+        AttributeError
+             If the data is not of the expected type.
+        """
+
+        if isinstance(self.X, pd.DataFrame) is False:
+            raise AttributeError('X must be a pandas Dataframe')
+
+        else:
+            pass
+
+    def missing_values_y(self):
+        """
+        Checks for missing values in target variable.
+
+        Returns
+        -------
+        Boolean
+
+        Raises
+        ------
+        AttributeError
+             If data is not in the expected format.
+
+        """
+        if isinstance(self.y, pd.Series):
+            return self.y.isnull().values.any()
+
+        elif isinstance(self.y, np.ndarray):
+            return np.isnan(self.y).any()
+
+        else:
+            raise AttributeError('Y must be a pandas Dataframe or a numpy array')
+
+    def check_missing_values(self):
+        """
+        Checks for missing values in the data.
+
+        Returns
+        -------
+        Boolean
+
+        Raises
+        ------
+        AttributeError
+             If there are missing values present.
+
+        """
+        X_missing = self.X.isnull().any().any()
+        y_missing = self.missing_values_y()
+
+        models_to_check = ('xgb', 'catboost', 'lgbm', 'lightgbm')
+
+        model_name = str(type(self.model)).lower()
+        if X_missing or y_missing:
+            if any([x in model_name for x in models_to_check]):
+                print('Warning there are missing values in your data !')
+            else:
+                raise ValueError('There are missing values in your Data')
+        else:
+            pass
+
+    def train_model(self):
+        """
+        Trains Model also checks to see if the model is an instance of catboost as it needs extra parameters
+        also the try except is for models with a verbose statement
+
+        Parameters
+        ----------
+        X: Dataframe
+            A pandas dataframe of the features.
+
+        y: Series/ndarray
+            A pandas series or numpy ndarray of the target
+
+        Returns
+        ----------
+        fitted model object
+        """
+        if 'catboost' in self.model_type:
+            self.model.fit(self.X_boruta, self.y, sample_weight=self.sample_weight,
+                           cat_features=self.X_categorical, verbose=False)
+        else:
+            try:
+                self.model.fit(self.X_boruta, self.y, sample_weight=self.sample_weight, verbose=False)
+            except:
+                self.model.fit(self.X_boruta, self.y, sample_weight=self.sample_weight)
 
     def calculate_rejected_accepted_tentative(self, verbose):
-
         """
         Figures out which features have been either accepted rejected or tentative
 
@@ -388,154 +360,113 @@ class BorutaShap:
         3 lists
 
         """
-
-        self.rejected  = list(set(self.flatten_list(self.rejected_columns))-set(self.flatten_list(self.accepted_columns)))
-        self.accepted  = list(set(self.flatten_list(self.accepted_columns)))
+        self.rejected = list(set(self.flatten_list(self.rejected_columns))-set(self.flatten_list(self.accepted_columns)))
+        self.accepted = list(set(self.flatten_list(self.accepted_columns)))
         self.tentative = list(set(self.all_columns) - set(self.rejected + self.accepted))
 
         if verbose:
-            print(str(len(self.accepted))  + ' attributes confirmed important: ' + str(self.accepted))
-            print(str(len(self.rejected))  + ' attributes confirmed unimportant: ' + str(self.rejected))
+            print(str(len(self.accepted)) + ' attributes confirmed important: ' + str(self.accepted))
+            print(str(len(self.rejected)) + ' attributes confirmed unimportant: ' + str(self.rejected))
             print(str(len(self.tentative)) + ' tentative attributes remains: ' + str(self.tentative))
 
-
-
     def create_importance_history(self):
-
         """
         Creates a dataframe object to store historical feature importance scores.
-
-        Returns
-        -------
-        Datframe
-
         """
-
         self.history_shadow = np.zeros(self.ncols)
         self.history_x = np.zeros(self.ncols)
         self.history_hits = np.zeros(self.ncols)
 
-
     def update_importance_history(self):
-
         """
-        At each iteration update the datframe object that stores the historical feature importance scores.
-
-        Returns
-        -------
-        Datframe
-
+        At each iteration update the dataframe object that stores the historical feature importance scores.
         """
-
-        padded_history_shadow  = np.full((self.ncols), np.NaN)
-        padded_history_x = np.full((self.ncols), np.NaN)
+        padded_history_shadow = np.full(self.ncols, np.NaN)
+        padded_history_x = np.full(self.ncols, np.NaN)
 
         for (index, col) in enumerate(self.columns):
             map_index = self.order[col]
-            padded_history_shadow[map_index] = self.Shadow_feature_import[index]
+            padded_history_shadow[map_index] = self.shadow_feature_import[index]
             padded_history_x[map_index] = self.X_feature_import[index]
 
         self.history_shadow = np.vstack((self.history_shadow, padded_history_shadow))
         self.history_x = np.vstack((self.history_x, padded_history_x))
 
-
-
     def store_feature_importance(self):
-
         """
         Reshapes the columns in the historical feature importance scores object also adds the mean, median, max, min
         shadow feature scores.
 
         Returns
         -------
-        Datframe
-
+        Dataframe
         """
+        self.history_x = pd.DataFrame(
+            data=self.history_x,
+            columns=self.all_columns
+        )
 
-        self.history_x = pd.DataFrame(data=self.history_x,
-                                 columns=self.all_columns)
-
-
-        self.history_x['Max_Shadow']    =  [max(i) for i in self.history_shadow]
-        self.history_x['Min_Shadow']    =  [min(i) for i in self.history_shadow]
-        self.history_x['Mean_Shadow']   =  [np.nanmean(i) for i in self.history_shadow]
-        self.history_x['Median_Shadow'] =  [np.nanmedian(i) for i in self.history_shadow]
-
+        self.history_x['Max_Shadow'] = [max(i) for i in self.history_shadow]
+        self.history_x['Min_Shadow'] = [min(i) for i in self.history_shadow]
+        self.history_x['Mean_Shadow'] = [np.nanmean(i) for i in self.history_shadow]
+        self.history_x['Median_Shadow'] = [np.nanmedian(i) for i in self.history_shadow]
 
     def results_to_csv(self, filename='feature_importance'):
-
         """
         Saves the historical feature importance scores to csv.
 
         Parameters
         ----------
-        filname : string
-            used as the name for the outputed file.
+        filename : string
+            Used as the name for the output file.
 
         Returns
         -------
-        comma delimnated file
-
+        Comma delimited file
         """
+        features = pd.DataFrame(
+            data={
+                'Features': self.history_x.iloc[1:].columns.values,
+                'Average Feature Importance': self.history_x.iloc[1:].mean(axis=0).values,
+                'Standard Deviation Importance': self.history_x.iloc[1:].std(axis=0).values
+            }
+        )
 
-        features = pd.DataFrame(data={'Features':self.history_x.iloc[1:].columns.values,
-        'Average Feature Importance':self.history_x.iloc[1:].mean(axis=0).values,
-        'Standard Deviation Importance':self.history_x.iloc[1:].std(axis=0).values})
-
-        decision_mapper = self.create_mapping_of_features_to_attribute(maps=['Tentative','Rejected','Accepted', 'Shadow'])
+        decision_mapper = self.create_mapping_of_features_to_attribute(
+            maps=['Tentative', 'Rejected', 'Accepted', 'Shadow']
+        )
         features['Decision'] = features['Features'].map(decision_mapper)
         features = features.sort_values(by='Average Feature Importance',ascending=False)
 
         features.to_csv(filename + '.csv', index=False)
 
-
     def remove_features_if_rejected(self):
-
         """
-        At each iteration if a feature has been rejected by the algorithm remove it from the process
-
+        At each iteration if a feature has been rejected by the algorithm remove it from the process.
         """
-
         if len(self.features_to_remove) != 0:
             for feature in self.features_to_remove:
                 try:
-                    self.X.drop(feature, axis = 1, inplace=True)
+                    self.X.drop(feature, axis=1, inplace=True)
                 except:
                     pass
-
         else:
             pass
-
-
-    @staticmethod
-    def average_of_list(lst):
-        return sum(lst) / len(lst)
 
     @staticmethod
     def flatten_list(array):
         return [item for sublist in array for item in sublist]
 
-
     def create_mapping_between_cols_and_indices(self):
         return dict(zip(self.X.columns.to_list(), np.arange(self.X.shape[1])))
 
-
     def calculate_hits(self):
-
         """
         If a features importance is greater than the maximum importance value of all the random shadow
         features then we assign it a hit.
-
-        Parameters
-        ----------
-        Percentile : value ranging from 0-1
-            can be used to reduce value of the maximum value of the shadow features making the algorithm
-            more lenient.
-
         """
-
-        shadow_threshold = np.percentile(self.Shadow_feature_import,
-                                        self.percentile)
+        shadow_threshold = np.percentile(self.shadow_feature_import,
+                                         self.percentile)
 
         padded_hits = np.zeros(self.ncols)
         hits = self.X_feature_import > shadow_threshold
@@ -546,50 +477,51 @@ class BorutaShap:
 
         return padded_hits
 
-
     def create_shadow_features(self):
         """
         Creates the random shadow features by shuffling the existing columns.
 
         Returns:
-            Datframe with random permutations of the original columns.
+            Dataframe with random permutations of the original columns.
         """
         self.X_shadow = self.X.apply(np.random.permutation)
-        
-        if isinstance(self.X_shadow, pd.DataFrame):
-            # append
-            obj_col = self.X_shadow.select_dtypes("object").columns.tolist()
-            if obj_col ==[] :
-                 pass
-            else :
-                 self.X_shadow[obj_col] =self.X_shadow[obj_col].astype("category")
+
+        # If the model is 'catboost', convert columns of type 'object' to type 'category' and make note of them.
+        if 'catboost' in self.model_type and isinstance(self.X_shadow, pd.DataFrame):
+            obj_cols = self.X_shadow.select_dtypes("object").columns.tolist()
+            if not obj_cols:
+                pass
+            else:
+                self.X_shadow[obj_cols] = self.X_shadow[obj_cols].astype("category")
 
         self.X_shadow.columns = ['shadow_' + feature for feature in self.X.columns]
-        self.X_boruta = pd.concat([self.X, self.X_shadow], axis = 1)
+        self.X_boruta = pd.concat([self.X, self.X_shadow], axis=1)
 
-        col_types = self.X_boruta.dtypes
-        self.X_categorical = list(col_types[(col_types=='category' ) | (col_types=='object')].index)
-
+        # 'catboost' models need to know which columns are categorical. Note their names.
+        if 'catboost' in self.model_type:
+            col_types = self.X_boruta.dtypes
+            self.X_categorical = list(col_types[(col_types == 'category') | (col_types == 'object')].index)
 
     @staticmethod
-    def calculate_Zscore(array):
+    def calculate_z_score(array):
         """
         Calculates the Z-score of an array
 
-        Parameters
-         ----------
-        array: array_like
+        Parameters:
+        ----------
+            array: array_like
 
         Returns:
+        ----------
             normalised array
         """
         mean_value = np.mean(array)
-        std_value  = np.std(array)
+        std_value = np.std(array)
         return [(element-mean_value)/std_value for element in array]
 
     def feature_importance(self):
         """
-        Caculates the feature importances scores of the model
+        Calculates the feature importance scores of the model
 
         Returns:
             array of normalized feature importance scores for both the shadow and original features.
@@ -599,19 +531,18 @@ class BorutaShap:
             ValueError:
                 If no Importance measure was specified
         """
-
         if self.importance_measure == 'shap':
             self.explain()
             vals = self.shap_values
             if self.normalize:
-                vals = self.calculate_Zscore(vals)
+                vals = self.calculate_z_score(vals)
             x_feature_import = vals[:len(self.X.columns)]
-            shadow_feature_import = vals[len(self.X_shadow.columns):]
+            shadow_feature_import = vals[len(self.X.columns):]
 
         elif self.importance_measure == 'gini':
             feature_importances_ = np.abs(self.model.feature_importances_)
             if self.normalize:
-                feature_importances_ = self.calculate_Zscore(feature_importances_)
+                feature_importances_ = self.calculate_z_score(feature_importances_)
             x_feature_import = feature_importances_[:len(self.X.columns)]
             shadow_feature_import = feature_importances_[len(self.X.columns):]
 
@@ -620,58 +551,52 @@ class BorutaShap:
 
         return x_feature_import, shadow_feature_import
 
-
     @staticmethod
     def isolation_forest(X, sample_weight):
-        '''
-        fits isloation forest to the dataset and gives an anomally score to every sample
-        '''
-        clf = IsolationForest().fit(X, sample_weight = sample_weight)
+        """
+        Fits an isolation forest to the dataset and gives an anomaly score to every sample
+        """
+        clf = IsolationForest().fit(X, sample_weight=sample_weight)
         preds = clf.score_samples(X)
         return preds
 
-
     @staticmethod
     def get_5_percent(num):
-        return round(5  / 100 * num)
-
+        return round(5 / 100 * num)
 
     def get_5_percent_splits(self, length):
-        '''
+        """
         splits dataframe into 5% intervals
-        '''
+        """
         five_percent = self.get_5_percent(length)
-        return np.arange(five_percent,length,five_percent)
-
-
+        return np.arange(five_percent, length, five_percent)
 
     def find_sample(self):
-        '''
-        Finds a sample by comparing the distributions of the anomally scores between the sample and the original
-        distribution using the KS-test. Starts of a 5% howver will increase to 10% and then 15% etc. if a significant sample can not be found
-        '''
+        """
+        Finds a sample by comparing the distributions of the anomaly scores between the sample and the original
+        distribution using the KS-test. Starts off at 5% however and increases to 10% and then 15% and so on
+        if a significant sample is not found.
+        """
         loop = True
         iteration = 0
         size = self.get_5_percent_splits(self.X.shape[0])
         element = 1
         while loop:
-
             sample_indices = choice(np.arange(self.preds.size),  size=size[element], replace=False)
             sample = np.take(self.preds, sample_indices)
             if ks_2samp(self.preds, sample).pvalue > 0.95:
                 break
 
             if iteration == 20:
-                element  += 1
+                element += 1
                 iteration = 0
-
 
         return self.X_boruta.iloc[sample_indices]
 
     def explain(self):
         """
         The shap package has numerous variants of explainers which use different assumptions depending on the model
-        type this function allows the user to choose explainer
+        type this function allows the user to choose explainer.
 
         Returns:
             shap values
@@ -681,69 +606,49 @@ class BorutaShap:
             ValueError:
                 if no model type has been specified tree as default
         """
-        explainer = fasttreeshap.TreeExplainer(
-            self.model,
-            # data=self.X,
-            feature_perturbation=self.feature_perturbation,
-            algorithm="v2",
-            approximate=self.approximate
+        if self.feature_perturbation == "interventional":
+            explainer = fasttreeshap.TreeExplainer(
+                self.model,
+                data=self.X_boruta,
+                feature_perturbation=self.feature_perturbation,
+                algorithm="v2",
+                approximate=self.approximate
+            )
+        else:
+            explainer = fasttreeshap.TreeExplainer(
+                self.model,
+                feature_perturbation=self.feature_perturbation,
+                algorithm="v2",
+                approximate=self.approximate
+            )
+
+        shap_values = explainer.shap_values(
+            self.find_sample() if self.sample else self.X_boruta,
+            approximate=self.approximate,
+            check_additivity=self.check_additivity
         )
 
-        # explainer = shap.TreeExplainer(
-        #     self.model,
-        #     feature_perturbation=self.feature_perturbation,
-        #     approximate=self.approximate,
-        # )
+        if self.classification:
+            # for some reason shap returns values wrapped in a list of length 1
+            self.shap_values = np.array(shap_values)
 
-        if self.sample:
-            if self.classification:
-                # for some reason shap returns values wraped in a list of length 1
+            if isinstance(self.shap_values, list):
+                class_inds = range(len(self.shap_values))
+                shap_imp = np.zeros(self.shap_values[0].shape[1])
+                for ind in class_inds:
+                    shap_imp += np.abs(self.shap_values[ind]).mean(0)
+                self.shap_values /= len(self.shap_values)
 
-                self.shap_values = np.array(explainer.shap_values(self.find_sample()))
-                if isinstance(self.shap_values, list):
-
-                    class_inds = range(len(self.shap_values))
-                    shap_imp = np.zeros(self.shap_values[0].shape[1])
-                    for i, ind in enumerate(class_inds):
-                        shap_imp += np.abs(self.shap_values[ind]).mean(0)
-                    self.shap_values /= len(self.shap_values)
-
-                elif len(self.shap_values.shape) == 3:
-                    self.shap_values = np.abs(self.shap_values).sum(axis=0)
-                    self.shap_values = self.shap_values.mean(0)
-
-                else:
-                    self.shap_values = np.abs(self.shap_values).mean(0)
+            elif len(self.shap_values.shape) == 3:
+                self.shap_values = np.abs(self.shap_values).sum(axis=0)
+                self.shap_values = self.shap_values.mean(0)
 
             else:
-                self.shap_values = explainer.shap_values(self.find_sample())
                 self.shap_values = np.abs(self.shap_values).mean(0)
 
         else:
-
-            if self.classification:
-                # for some reason shap returns values wraped in a list of length 1
-                self.shap_values = np.array(explainer.shap_values(self.X_boruta))
-                if isinstance(self.shap_values, list):
-
-                    class_inds = range(len(self.shap_values))
-                    shap_imp = np.zeros(self.shap_values[0].shape[1])
-                    for i, ind in enumerate(class_inds):
-                        shap_imp += np.abs(self.shap_values[ind]).mean(0)
-                    self.shap_values /= len(self.shap_values)
-
-                elif len(self.shap_values.shape) == 3:
-                    self.shap_values = np.abs(self.shap_values).sum(axis=0)
-                    self.shap_values = self.shap_values.mean(0)
-
-                else:
-                    self.shap_values = np.abs(self.shap_values).mean(0)
-
-            else:
-                self.shap_values = explainer.shap_values(self.X_boruta)
-                self.shap_values = np.abs(self.shap_values).mean(0)
-
-
+            self.shap_values = shap_values
+            self.shap_values = np.abs(self.shap_values).mean(0)
 
     @staticmethod
     def binomial_H0_test(array, n, p, alternative):
@@ -754,19 +659,16 @@ class BorutaShap:
         """
         return [binom_test(x, n=n, p=p, alternative=alternative) for x in array]
 
-
     @staticmethod
-    def symetric_difference_between_two_arrays(array_one, array_two):
+    def symmetric_difference_between_two_arrays(array_one, array_two):
         set_one = set(array_one)
         set_two = set(array_two)
         return np.array(list(set_one.symmetric_difference(set_two)))
-
 
     @staticmethod
     def find_index_of_true_in_array(array):
         length = len(array)
         return list(filter(lambda x: array[x], range(length)))
-
 
     @staticmethod
     def bonferoni_corrections(pvals, alpha=0.05, n_tests=None):
@@ -780,17 +682,15 @@ class BorutaShap:
         else:
             pass
 
-        alphacBon = alpha / float(n_tests)
-        reject = pvals <= alphacBon
+        alphac_bon = alpha / float(n_tests)
+        reject = pvals <= alphac_bon
         pvals_corrected = pvals * float(n_tests)
         return reject, pvals_corrected
 
-
     def test_features(self, iteration):
-
         """
         For each feature with an undetermined importance perform a two-sided test of equality
-        with the maximum shadow value to determine if it is statistcally better
+        with the maximum shadow value to determine if it is statistically better
 
         Parameters
         ----------
@@ -801,27 +701,35 @@ class BorutaShap:
             Two arrays of the names of the accepted and rejected columns at that instance
         """
 
-        acceptance_p_values = self.binomial_H0_test(self.hits,
-                                                    n=iteration,
-                                                    p=0.5,
-                                                    alternative='greater')
+        acceptance_p_values = self.binomial_H0_test(
+            self.hits,
+            n=iteration,
+            p=0.5,
+            alternative='greater'
+        )
 
-        regect_p_values = self.binomial_H0_test(self.hits,
-                                                n=iteration,
-                                                p=0.5,
-                                                alternative='less')
+        rejection_p_values = self.binomial_H0_test(
+            self.hits,
+            n=iteration,
+            p=0.5,
+            alternative='less'
+        )
 
         # [1] as function returns a tuple
-        modified_acceptance_p_values = self.bonferoni_corrections(acceptance_p_values,
-                                                                  alpha=0.05,
-                                                                  n_tests=len(self.columns))[1]
+        modified_acceptance_p_values = self.bonferoni_corrections(
+            acceptance_p_values,
+            alpha=0.05,
+            n_tests=len(self.columns)
+        )[1]
 
-        modified_regect_p_values = self.bonferoni_corrections(regect_p_values,
-                                                              alpha=0.05,
-                                                              n_tests=len(self.columns))[1]
+        modified_rejection_p_values = self.bonferoni_corrections(
+            rejection_p_values,
+            alpha=0.05,
+            n_tests=len(self.columns)
+        )[1]
 
-        # Take the inverse as we want true to keep featrues
-        rejected_columns = np.array(modified_regect_p_values) < self.pvalue
+        # Take the inverse as we want true to keep features
+        rejected_columns = np.array(modified_rejection_p_values) < self.pvalue
         accepted_columns = np.array(modified_acceptance_p_values) < self.pvalue
 
         rejected_indices = self.find_index_of_true_in_array(rejected_columns)
@@ -830,35 +738,25 @@ class BorutaShap:
         rejected_features = self.all_columns[rejected_indices]
         accepted_features = self.all_columns[accepted_indices]
 
-
         self.features_to_remove = rejected_features
-
 
         self.rejected_columns.append(rejected_features)
         self.accepted_columns.append(accepted_features)
 
-
-    def TentativeRoughFix(self):
-
+    def tentative_rough_fix(self):
         """
         Sometimes no matter how many iterations are run a feature may neither be rejected or
         accepted. This method is used in this case to make a decision on a tentative feature
         by comparing its median importance value with the median max shadow value.
 
-        Parameters
-        ----------
-        tentative: an array which holds the names of the tentative attiributes.
-
         Returns:
             Two arrays of the names of the final decision of the accepted and rejected columns.
 
         """
-
-        median_tentaive_values = self.history_x[self.tentative].median(axis=0).values
+        median_tentative_values = self.history_x[self.tentative].median(axis=0).values
         median_max_shadow = self.history_x['Max_Shadow'].median(axis=0)
 
-
-        filtered = median_tentaive_values > median_max_shadow
+        filtered = median_tentative_values > median_max_shadow
 
         self.tentative = np.array(self.tentative)
         newly_accepted = self.tentative[filtered]
@@ -867,7 +765,7 @@ class BorutaShap:
             newly_rejected = self.tentative
 
         else:
-            newly_rejected = self.symetric_difference_between_two_arrays(newly_accepted, self.tentative)
+            newly_rejected = self.symmetric_difference_between_two_arrays(newly_accepted, self.tentative)
 
         print(str(len(newly_accepted)) + ' tentative features are now accepted: ' + str(newly_accepted))
         print(str(len(newly_rejected)) + ' tentative features are now rejected: ' + str(newly_rejected))
@@ -875,9 +773,7 @@ class BorutaShap:
         self.rejected = self.rejected + newly_rejected.tolist()
         self.accepted = self.accepted + newly_accepted.tolist()
 
-
-
-    def Subset(self, tentative=False):
+    def subset(self, tentative=False):
         """
         Returns the subset of desired features
         """
@@ -885,7 +781,6 @@ class BorutaShap:
             return self.starting_X[self.accepted + self.tentative.tolist()]
         else:
             return self.starting_X[self.accepted]
-
 
     @staticmethod
     def create_list(array, color):
@@ -897,26 +792,19 @@ class BorutaShap:
         data = data.copy()
         return data.loc[(data[column] == value) | (data[column] == 'Shadow')]
 
-
     @staticmethod
-    def hasNumbers(inputString):
-        return any(char.isdigit() for char in inputString)
-
-
-    @staticmethod
-    def check_if_which_features_is_correct(my_string):
-
+    def check_if_input_field_which_features_is_correct(my_string):
         my_string = str(my_string).lower()
-        if my_string in ['tentative','rejected','accepted','all']:
+        if my_string in ['tentative', 'rejected', 'accepted', 'all']:
             pass
-
         else:
-            raise ValueError(my_string + " is not a valid value did you mean to type 'all', 'tentative', 'accepted' or 'rejected' ?")
+            raise ValueError(
+                my_string +
+                " is not a valid value did you mean to type 'all', 'tentative', 'accepted' or 'rejected' ?"
+            )
 
-
-
-    def plot(self, X_rotation=90, X_size=8, figsize=(12,8),
-            y_scale='log', which_features='all', display=True):
+    def plot(self, X_rotation=90, X_size=8, figsize=(12, 8),
+             y_scale='log', which_features='all', display=True):
 
         """
         creates a boxplot of the feature importances
@@ -929,6 +817,9 @@ class BorutaShap:
         X_size: int
             Controls the font size of the tick labels
 
+        figsize: tuple of ints
+            Defines the size of the plot
+
         y_scale: string
             Log transform of the y axis scale as hard to see the plot as it is normally dominated by two or three
             features.
@@ -937,27 +828,28 @@ class BorutaShap:
             Despite efforts if the number of columns is large the plot becomes cluttered so this parameter allows you to
             select subsets of the features like the accepted, rejected or tentative features default is all.
 
-        Display: Boolean
+        display: Boolean
         controls if the output is displayed or not, set to false when running test scripts
-
         """
         # data from wide to long
         data = self.history_x.iloc[1:]
         data['index'] = data.index
         data = pd.melt(data, id_vars='index', var_name='Methods')
 
-        decision_mapper = self.create_mapping_of_features_to_attribute(maps=['Tentative','Rejected','Accepted', 'Shadow'])
+        decision_mapper = self.create_mapping_of_features_to_attribute(
+            maps=['Tentative', 'Rejected', 'Accepted', 'Shadow']
+        )
         data['Decision'] = data['Methods'].map(decision_mapper)
         data.drop(['index'], axis=1, inplace=True)
 
+        options = {
+            'accepted': self.filter_data(data, 'Decision', 'Accepted'),
+            'tentative': self.filter_data(data, 'Decision', 'Tentative'),
+            'rejected': self.filter_data(data, 'Decision', 'Rejected'),
+            'all': data
+        }
 
-        options = { 'accepted' : self.filter_data(data,'Decision', 'Accepted'),
-                    'tentative': self.filter_data(data,'Decision', 'Tentative'),
-                    'rejected' : self.filter_data(data,'Decision', 'Rejected'),
-                    'all' : data
-                    }
-
-        self.check_if_which_features_is_correct(which_features)
+        self.check_if_input_field_which_features_is_correct(which_features)
         data = options[which_features.lower()]
 
         self.box_plot(data=data,
@@ -970,39 +862,50 @@ class BorutaShap:
         else:
             plt.close()
 
-
     def box_plot(self, data, X_rotation, X_size, y_scale, figsize):
-
-        if y_scale=='log':
+        if y_scale == 'log':
             minimum = data['value'].min()
             if minimum <= 0:
                 data['value'] += abs(minimum) + 0.01
 
         order = data.groupby(by=["Methods"])["value"].mean().sort_values(ascending=False).index
-        my_palette = self.create_mapping_of_features_to_attribute(maps= ['yellow','red','green','blue'])
+        my_palette = self.create_mapping_of_features_to_attribute(
+            maps=[
+                'yellow',
+                'red',
+                'green',
+                'blue'
+            ]
+        )
 
         # Use a color palette
         plt.figure(figsize=figsize)
-        ax = sns.boxplot(x=data["Methods"], y=data["value"],
-                        order=order, palette=my_palette)
+        ax = sns.boxplot(
+            x=data["Methods"],
+            y=data["value"],
+            order=order,
+            palette=my_palette
+        )
 
-        if y_scale == 'log':ax.set(yscale="log")
+        if y_scale == 'log':
+            ax.set(yscale="log")
         ax.set_xticklabels(ax.get_xticklabels(), rotation=X_rotation, size=X_size)
         ax.set_title('Feature Importance')
         ax.set_ylabel('Z-Score')
         ax.set_xlabel('Features')
 
-
-    def create_mapping_of_features_to_attribute(self, maps = []):
+    def create_mapping_of_features_to_attribute(self, maps=None):
+        if maps is None:
+            maps = []
 
         rejected = list(self.rejected)
         tentative = list(self.tentative)
         accepted = list(self.accepted)
-        shadow = ['Max_Shadow','Median_Shadow','Min_Shadow','Mean_Shadow']
+        shadow = ['Max_Shadow', 'Median_Shadow', 'Min_Shadow', 'Mean_Shadow']
 
         tentative_map = self.create_list(tentative, maps[0])
-        rejected_map  = self.create_list(rejected, maps[1])
-        accepted_map  = self.create_list(accepted, maps[2])
+        rejected_map = self.create_list(rejected, maps[1])
+        accepted_map = self.create_list(accepted, maps[2])
         shadow_map = self.create_list(shadow, maps[3])
 
         values = tentative_map + rejected_map + accepted_map + shadow_map
@@ -1010,7 +913,34 @@ class BorutaShap:
 
         return self.to_dictionary(keys, values)
 
-
     @staticmethod
     def to_dictionary(list_one, list_two):
         return dict(zip(list_one, list_two))
+
+
+def load_data(data_type='classification'):
+    """
+    Load Example datasets for the user to try out the package
+    """
+    data_type = data_type.lower()
+
+    if data_type == 'classification':
+        cancer = load_breast_cancer()
+        X = pd.DataFrame(
+            np.c_[cancer['data'], cancer['target']],
+            columns=np.append(cancer['feature_names'], ['target'])
+        )
+        y = X.pop('target')
+
+    elif data_type == 'regression':
+        housing = fetch_california_housing()
+        X = pd.DataFrame(
+            np.c_[housing['data'], housing['target']],
+            columns=np.append(housing['feature_names'], ['target'])
+        )
+        y = X.pop('target')
+
+    else:
+        raise ValueError("No data_type was specified, use either 'classification' or 'regression'")
+
+    return X, y
