@@ -3,15 +3,47 @@ import pandas as pd
 from BorutaShap import BorutaShap
 from sklearn.ensemble import RandomForestClassifier
 
+RANDOM_STATE = 421
+N_JOBS = 8
 
-df = pd.read_parquet('/Users/ali/Documents/code/feature_candidates_first_filter.parquet')
-df.reset_index(drop=True, inplace=True)
+RFC_PARAMS = {
+    'params_class_weight': 'balanced_subsample',
+    'params_max_depth': 504,
+    'params_max_features': 25,
+    'params_max_samples': 0.9837637180965028,
+    'params_min_samples_leaf': 16,
+    'params_min_samples_split': 2,
+    'params_n_estimators': 482,
+}
 
-df2 = df.sample(axis=0, frac=0.03)
-X = df2.drop(columns=['y_classification', 'ror_next_24h_max', 'time_close']).sample(axis=1, frac=0.02)
-y = df2['y_classification']
+df = pd.read_parquet('/Users/ali/Downloads/training_data_round_1.parquet')
+# df.reset_index(drop=True, inplace=True)
+# df = df.sample(axis=0, frac=0.1)
 
-rfc = RandomForestClassifier(class_weight='balanced_subsample', n_jobs=-1)
-Feature_Selector = BorutaShap(model=rfc, importance_measure='shap', classification=True)#, percentile=80, pvalue=0.1)
+X = df.drop(columns=['y_classification', 'ror_next_24h_max', 'time_close'])  # .sample(axis=1, frac=0.02)
+y = df['y_classification']
 
-Feature_Selector.fit(X=X, y=y, n_trials=100, random_state=0, sample=True, train_or_test='train')
+
+rfc = RandomForestClassifier(
+    n_estimators=RFC_PARAMS['params_n_estimators'],
+    max_features=RFC_PARAMS['params_max_features'],
+    max_depth=RFC_PARAMS['params_max_depth'],
+    min_samples_leaf=RFC_PARAMS['params_min_samples_leaf'],
+    min_samples_split=RFC_PARAMS['params_min_samples_split'],
+    class_weight=RFC_PARAMS['params_class_weight'],
+    max_samples=RFC_PARAMS['params_max_samples'],
+    n_jobs=N_JOBS,
+    verbose=1
+)
+
+feature_selector = BorutaShap(model=rfc, importance_measure='shap', classification=True)
+feature_selector.fit(
+    X=X,
+    y=y,
+    n_trials=100,
+    random_state=RANDOM_STATE,
+    feature_perturbation="tree_path_dependent",
+    n_jobs=N_JOBS
+)
+
+feature_selector.results_to_csv('feature_importance_interventional_percentile_90_pvalue_005')

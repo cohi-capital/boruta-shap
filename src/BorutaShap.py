@@ -71,6 +71,7 @@ class BorutaShap:
         self.preds = None
         self.X_feature_import = None
         self.shadow_feature_import = None
+        self.n_jobs = None
 
         # Populated in create_importance_history
         self.history_shadow = None
@@ -95,7 +96,7 @@ class BorutaShap:
         self.model_type = str(type(self.model)).lower()
 
     def fit(self, X, y, sample_weight=None, n_trials=20, random_state=0, sample=False, check_additivity=False,
-            normalize=True, verbose=True, approximate=False, feature_perturbation="tree_path_dependent"):
+            normalize=True, verbose=True, approximate=False, feature_perturbation="tree_path_dependent", n_jobs=-1):
         """
         The main body of the program this method it computes the following
 
@@ -161,7 +162,11 @@ class BorutaShap:
         feature_perturbation: string
             Parameter to SHAP. The two options are 'tree_path_dependent' and 'interventional'. These refer to the
             methods of calculating probabilities in SHAP.'tree_path_dependent' is truer to data while 'interventional'
-            is truer to model. 'interventional' tends to be slower.
+            is truer to model. 'tree_path_dependent' is the faster options. Thanks to the fasttreeshap package,
+            we can now parallelize the job as well.
+
+        n_jobs: int
+            Number of cores to to run interventional fastreesshap on.
         """
         if sample_weight is None:
             sample_weight = np.ones(len(X))
@@ -185,6 +190,8 @@ class BorutaShap:
         self.approximate = approximate
         self.feature_perturbation = feature_perturbation
         self.check_additivity = check_additivity
+
+        self.n_jobs = n_jobs
 
         self.features_to_remove = []
         self.hits = np.zeros(self.ncols)
@@ -211,7 +218,7 @@ class BorutaShap:
             self.history_hits = np.vstack((self.history_hits, self.hits))
             self.test_features(iteration=trial+1)
 
-            print(f"\nFinished loop {trial} of {n_trials}.\n")
+            print(f"\nFinished loop {trial+1} of {n_trials}.\n")
 
         self.store_feature_importance()
         self.calculate_rejected_accepted_tentative(verbose=verbose)
@@ -612,14 +619,16 @@ class BorutaShap:
                 data=self.X_boruta,
                 feature_perturbation=self.feature_perturbation,
                 algorithm="v2",
-                approximate=self.approximate
+                approximate=self.approximate,
+                n_jobs=self.n_jobs
             )
         else:
             explainer = fasttreeshap.TreeExplainer(
                 self.model,
                 feature_perturbation=self.feature_perturbation,
                 algorithm="v2",
-                approximate=self.approximate
+                approximate=self.approximate,
+                n_jobs=self.n_jobs
             )
 
         shap_values = explainer.shap_values(
