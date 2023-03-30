@@ -178,7 +178,9 @@ class BorutaShap:
         self.n_trials = n_trials
         self.random_state = random_state
         self.ncols = self.X.shape[1]
+        self.columns = self.X.columns.to_numpy()
         self.all_columns = self.X.columns.to_numpy()
+        self.create_shadow_features()
         self.rejected_columns = []
         self.accepted_columns = []
 
@@ -201,16 +203,21 @@ class BorutaShap:
         if self.sample:
             self.preds = self.isolation_forest(self.X, self.sample_weight)
 
+        self.train_model()
+
         for trial in trange(self.n_trials):
-            self.remove_features_if_rejected()
-            self.columns = self.X.columns.to_numpy()
-            self.create_shadow_features()
+            num_features_dropped = self.remove_features_if_rejected()
 
             # Early stopping
             if self.X.shape[1] == 0:
                 break
 
-            self.train_model()
+            # Only retrain if any columns have been dropped. Otherwise skip retraining since it is costly.
+            if num_features_dropped:
+                self.columns = self.X.columns.to_numpy()
+                self.create_shadow_features()
+                self.train_model()
+
             self.X_feature_import, self.shadow_feature_import = self.feature_importance()
             self.update_importance_history()
             hits = self.calculate_hits()
@@ -451,14 +458,17 @@ class BorutaShap:
         """
         At each iteration if a feature has been rejected by the algorithm remove it from the process.
         """
+        features_dropped = 0
         if len(self.features_to_remove) != 0:
             for feature in self.features_to_remove:
                 try:
                     self.X.drop(feature, axis=1, inplace=True)
+                    features_dropped += 1
                 except:
                     pass
         else:
             pass
+        return features_dropped
 
     @staticmethod
     def flatten_list(array):
