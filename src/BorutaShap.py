@@ -61,6 +61,7 @@ class BorutaShap:
         self.rejected_columns = []
         self.accepted_columns = []
         self.sample = None
+        self.sample_granularity_pct = None
         self.normalize = None
         self.approximate = None
         self.feature_perturbation = None
@@ -95,8 +96,9 @@ class BorutaShap:
         # Record model type
         self.model_type = str(type(self.model)).lower()
 
-    def fit(self, X, y, sample_weight=None, n_trials=20, random_state=0, sample=False, check_additivity=False,
-            normalize=True, verbose=True, approximate=False, feature_perturbation="tree_path_dependent", n_jobs=-1):
+    def fit(self, X, y, sample_weight=None, n_trials=20, random_state=0, sample=False, sample_granularity_pct=5,
+            check_additivity=False, normalize=True, verbose=True, approximate=False,
+            feature_perturbation="tree_path_dependent", n_jobs=-1):
         """
         The main body of the program this method it computes the following
 
@@ -147,6 +149,10 @@ class BorutaShap:
         sample: Boolean
             If true then a row-wise sample of the data will be used to calculate the feature importance values
 
+        sample_granularity_pct: float
+            If sampling is enabled, this determines the step size of increments of the sample size, as an adequately
+            large sample is searched for.
+
         check_additivity: Boolean
             Whether to check the additivity property during SHAP calculations
 
@@ -187,6 +193,7 @@ class BorutaShap:
         self.check_X()
         self.check_missing_values()
         self.sample = sample
+        self.sample_granularity_pct = sample_granularity_pct
 
         self.normalize = normalize
         self.approximate = approximate
@@ -577,38 +584,28 @@ class BorutaShap:
         preds = clf.score_samples(X)
         return preds
 
-    @staticmethod
-    def get_5_percent(num):
-        return round(5 / 100 * num)
-
-    def get_5_percent_splits(self, length):
+    def get_split_size_list(self, length):
         """
-        splits dataframe into 5% intervals
+        Provides indices to split dataframe into intervals specified sample_granularity_pct
         """
-        five_percent = self.get_5_percent(length)
-        return np.arange(five_percent, length, five_percent)
+        pct_value = round(self.sample_granularity_pct / 100 * length)
+        return np.arange(pct_value, length, pct_value)
 
     def find_sample(self):
         """
         Finds a sample by comparing the distributions of the anomaly scores between the sample and the original
-        distribution using the KS-test. Starts off at 5% however and increases to 10% and then 15% and so on
-        if a significant sample is not found.
+        distribution using the KS-test. Starts off at sample_granularity_pct and increases by the same till
+        a significant sample is found.
         """
-        loop = True
-        iteration = 0
-        size = self.get_5_percent_splits(self.X.shape[0])
-        element = 1
-        while loop:
-            sample_indices = choice(np.arange(self.preds.size),  size=size[element], replace=False)
+        size = self.get_split_size_list(self.X.shape[0])
+        for s in size:
+            sample_indices = choice(np.arange(self.preds.size), size=s, replace=False)
             sample = np.take(self.preds, sample_indices)
             if ks_2samp(self.preds, sample).pvalue > 0.95:
-                break
+                return self.X_boruta.iloc[sample_indices]
 
-            if iteration == 20:
-                element += 1
-                iteration = 0
-
-        return self.X_boruta.iloc[sample_indices]
+        print("Significant sample not found.")
+        return self.X_boruta
 
     def explain(self):
         """

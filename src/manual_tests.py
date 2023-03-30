@@ -13,7 +13,7 @@ RFC_PARAMS = {
     'params_max_samples': 0.6932948590457279,
     'params_min_samples_leaf': 26,
     'params_min_samples_split': 11,
-    'params_n_estimators': 100,  # 0,
+    'params_n_estimators': 8,  # 0,
     'params_pos_threshold': 0.9434533270075801
 }
 
@@ -47,7 +47,8 @@ feature_selector.fit(
     random_state=RANDOM_STATE,
     feature_perturbation="tree_path_dependent",
     n_jobs=N_JOBS,
-    sample=True
+    sample=True,
+    sample_granularity_pct=2.5
 )
 
 feature_selector.results_to_csv('feature_importance_tree_path_dependent_percentile_90_pvalue_005')
