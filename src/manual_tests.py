@@ -47,8 +47,7 @@ feature_selector.fit(
     random_state=RANDOM_STATE,
     feature_perturbation="tree_path_dependent",
     n_jobs=N_JOBS,
-    sample=True,
-    sample_granularity_pct=2.5
+    sample_pct=2.5
 )
 
 feature_selector.results_to_csv('feature_importance_tree_path_dependent_percentile_90_pvalue_005')

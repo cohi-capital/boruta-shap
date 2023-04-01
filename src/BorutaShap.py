@@ -60,8 +60,7 @@ class BorutaShap:
         self.all_columns = None
         self.rejected_columns = []
         self.accepted_columns = []
-        self.sample = None
-        self.sample_granularity_pct = None
+        self.sample_pct = None
         self.normalize = None
         self.approximate = None
         self.feature_perturbation = None
@@ -96,7 +95,7 @@ class BorutaShap:
         # Record model type
         self.model_type = str(type(self.model)).lower()
 
-    def fit(self, X, y, sample_weight=None, n_trials=20, random_state=0, sample=False, sample_granularity_pct=5,
+    def fit(self, X, y, sample_weight=None, n_trials=20, random_state=0, sample_pct=None,
             check_additivity=False, normalize=True, verbose=True, approximate=False,
             feature_perturbation="tree_path_dependent", n_jobs=-1):
         """
@@ -146,12 +145,8 @@ class BorutaShap:
         random_state: int
             A random state for reproducibility of results
 
-        sample: Boolean
-            If true then a row-wise sample of the data will be used to calculate the feature importance values
-
-        sample_granularity_pct: float
-            If sampling is enabled, this determines the step size of increments of the sample size, as an adequately
-            large sample is searched for.
+        sample_pct: Int
+            An integer ranging from 0-100 that determines how much of the data is sampled while calculating SHAP values.
 
         check_additivity: Boolean
             Whether to check the additivity property during SHAP calculations
@@ -192,8 +187,7 @@ class BorutaShap:
 
         self.check_X()
         self.check_missing_values()
-        self.sample = sample
-        self.sample_granularity_pct = sample_granularity_pct
+        self.sample_pct = sample_pct
 
         self.normalize = normalize
         self.approximate = approximate
@@ -207,7 +201,7 @@ class BorutaShap:
         self.order = self.create_mapping_between_cols_and_indices()
         self.create_importance_history()
 
-        if self.sample:
+        if self.sample_pct is not None:
             self.preds = self.isolation_forest(self.X, self.sample_weight)
 
         self.train_model()
@@ -586,25 +580,33 @@ class BorutaShap:
 
     def get_split_size_list(self, length):
         """
-        Provides indices to split dataframe into intervals specified sample_granularity_pct
+        Provides indices to split dataframe into intervals specified by sample_pct
         """
-        pct_value = round(self.sample_granularity_pct / 100 * length)
-        return np.arange(pct_value, length, pct_value)
+        pct_step_size = round(self.sample_pct / 100 * length)
+        return np.arange(pct_step_size, length, pct_step_size)
 
     def find_sample(self):
         """
         Finds a sample by comparing the distributions of the anomaly scores between the sample and the original
-        distribution using the KS-test. Starts off at sample_granularity_pct and increases by the same till
+        distribution using the KS-test. Starts off at sample_pct and tries to find a significant sample a 100 times
+        before going up to the next size increment by the same till
         a significant sample is found.
         """
-        size = self.get_split_size_list(self.X.shape[0])
-        for s in size:
-            sample_indices = choice(np.arange(self.preds.size), size=s, replace=False)
-            sample = np.take(self.preds, sample_indices)
-            if ks_2samp(self.preds, sample).pvalue > 0.95:
-                return self.X_boruta.iloc[sample_indices]
+        max_tries_per_size = 100
+        p_value_threshold = 0.95
 
-        print("Significant sample not found.")
+        size_steps = self.get_split_size_list(self.X.shape[0])
+        for size in size_steps:
+            for i in range(max_tries_per_size):
+                sample_indices = choice(np.arange(self.preds.size), size=size, replace=False)
+                sample = np.take(self.preds, sample_indices)
+                ks_p_value = ks_2samp(self.preds, sample).pvalue
+                if ks_p_value > p_value_threshold:
+                    return self.X_boruta.iloc[sample_indices]
+            print(f"Could not find a significant sample in {max_tries_per_size} attempts for size {size}. "
+                  f"Increasing size.")
+
+        print("Significant sample not found. Returning the entire dataset.")
         return self.X_boruta
 
     def explain(self):
@@ -639,7 +641,7 @@ class BorutaShap:
             )
 
         shap_values = explainer.shap_values(
-            self.find_sample() if self.sample else self.X_boruta,
+            self.find_sample() if self.sample_pct is not None else self.X_boruta,
             approximate=self.approximate,
             check_additivity=self.check_additivity
         )
