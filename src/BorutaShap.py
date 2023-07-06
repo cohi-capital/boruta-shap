@@ -1,3 +1,4 @@
+from datetime import datetime
 from sklearn.datasets import load_breast_cancer, fetch_california_housing
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, IsolationForest
 from scipy.stats import binom_test, ks_2samp
@@ -97,7 +98,7 @@ class BorutaShap:
 
     def fit(self, X, y, sample_weight=None, n_trials=20, random_state=0, sample_pct=None,
             check_additivity=False, normalize=True, verbose=True, approximate=False,
-            feature_perturbation="tree_path_dependent", n_jobs=-1):
+            feature_perturbation="tree_path_dependent", n_jobs=-1, fuckidy=None):
         """
         The main body of the program this method it computes the following
 
@@ -225,8 +226,14 @@ class BorutaShap:
             self.hits += hits
             self.history_hits = np.vstack((self.history_hits, self.hits))
             self.test_features(iteration=trial+1)
+            
+            # Short circuit if there are no tentative columns left.
+            self.calculate_rejected_accepted_tentative(verbose=False)
+            if not self.tentative:
+                print("No tentative columns left. Terminating.")
+                break
 
-            print(f"\nFinished loop {trial+1} of {n_trials}.\n")
+            print(f"\n{datetime.now()} | Finished loop {trial+1} of {n_trials}.\n")
 
         self.store_feature_importance()
         self.calculate_rejected_accepted_tentative(verbose=verbose)
@@ -461,14 +468,13 @@ class BorutaShap:
         """
         features_dropped = 0
         if len(self.features_to_remove) != 0:
-            for feature in self.features_to_remove:
-                try:
-                    self.X.drop(feature, axis=1, inplace=True)
-                    features_dropped += 1
-                except:
-                    pass
-        else:
-            pass
+            print(f"Dropping features: {self.features_to_remove}")
+            try:
+                self.X.drop(columns=list(self.features_to_remove), inplace=True)
+                features_dropped = len(self.features_to_remove)
+                self.features_to_remove = []
+            except Exception as e:
+                print(f"Failed to drop features {self.features_to_remove} because of exception: {e}")
         return features_dropped
 
     @staticmethod
@@ -760,6 +766,11 @@ class BorutaShap:
 
         self.rejected_columns.append(rejected_features)
         self.accepted_columns.append(accepted_features)
+        
+        if len(rejected_features) > 0:
+            print(f"Rejecting {len(rejected_features)} features: {rejected_features}")
+        if len(accepted_features) > 0:
+            print(f"Accepting {len(accepted_features)} features: {accepted_features}")
 
     def tentative_rough_fix(self):
         """
